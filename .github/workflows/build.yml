@@ -10,11 +10,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      SDK_URL: https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
-      SDK_SHA256: 7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
-      SDK_ARCHIVE: ${{ runner.temp }}/openwrt-sdk-cache/openwrt-sdk.tar.zst
-      SDK_ROOT: ${{ runner.temp }}/openwrt-sdk
 
     steps:
       - uses: actions/checkout@v4
@@ -22,13 +17,16 @@ jobs:
       - name: Cache pinned SDK and package inputs
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/openwrt-sdk-cache
-          key: ${{ env.SDK_URL }}-${{ env.SDK_SHA256 }}-${{ hashFiles('Makefile', 'files/**') }}
+          path: .cache/openwrt-sdk
+          key: openwrt-sdk-25.12.0-filogic-7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139-${{ hashFiles('Makefile', 'files/**') }}
 
       - name: Download and verify SDK
         shell: sh
         run: |
           set -eu
+          SDK_URL=https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          SDK_SHA256=7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
           mkdir -p "$(dirname "$SDK_ARCHIVE")"
           if [ ! -f "$SDK_ARCHIVE" ]; then
             curl --fail --location --retry 3 --output "$SDK_ARCHIVE" "$SDK_URL"
@@ -39,6 +37,8 @@ jobs:
         shell: sh
         run: |
           set -eu
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
+          SDK_ROOT=.work/openwrt-sdk
           rm -rf "$SDK_ROOT"
           mkdir -p "$SDK_ROOT"
           tar --zstd -xf "$SDK_ARCHIVE" -C "$SDK_ROOT"

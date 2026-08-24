@@ -11,6 +11,9 @@ sdk_sha256='7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139'
 assert_file_exists "$workflow"
 assert_file_contains "$workflow" 'permissions:'
 assert_file_contains "$workflow" 'contents: read'
+assert_file_not_contains "$workflow" 'runner.temp'
+assert_file_not_contains "$workflow" 'runner.'
+assert_file_not_contains "$workflow" '    env:'
 assert_file_contains "$workflow" 'actions/cache@'
 assert_file_contains "$workflow" "$sdk_url"
 assert_file_contains "$workflow" "$sdk_sha256"
