@@ -97,14 +97,39 @@ On an isolated, supported router:
 
 **Evidence:** `router-preparation: <PASS/FAIL/UNRUN>; platform: <expected/not-expected>`
 
+## 3a. Enroll the trusted repository
+
+**Status: UNRUN — no router is available.**
+
+- [ ] Compare the public-key fingerprint with
+  `keys/xray-openwrt-repository.pem.sha256` from the reviewed revision.
+- [ ] Download, inspect, and run the enrollment script from
+  `docs/repository.md`.
+- [ ] Run enrollment twice and confirm there is exactly one project key and
+  one exact repository line.
+- [ ] Refresh the signed index and install without `--allow-untrusted`:
+
+  ```sh
+  apk update
+  apk add xray-openwrt-integration
+  ```
+
+- [ ] Against an isolated temporary feed copy, perform a wrong-key test and
+  alter one byte of `packages.adb`; confirm both are rejected. Restore the
+  production feed before continuing.
+
+**Evidence:** `trusted repository: <PASS/FAIL/UNRUN>; fingerprint: <PASS/FAIL>;
+idempotent: <PASS/FAIL>; wrong-key: <REJECTED/ACCEPTED>; altered-index:
+<REJECTED/ACCEPTED>`
+
 ## 4. Clean package installation
 
 **Status: UNRUN — no router is available.**
 
-- [ ] Install the downloaded artifact:
+- [ ] Install from the enrolled signed repository:
 
   ```sh
-  apk add --allow-untrusted ./xray-openwrt-integration-*.apk
+  apk add xray-openwrt-integration
   ```
 
 - [ ] Verify installed ownership and payload without exposing configuration
@@ -272,6 +297,20 @@ On an isolated, supported router:
   present, and the update/rollback commands still execute.
 
 **Evidence:** `package-upgrade: <PASS/FAIL/UNRUN>; uci-hash: <unchanged/changed>; config-hash: <unchanged/changed>; service-after-upgrade: <PASS/FAIL>`
+
+## 10. Retained-package manual downgrade
+
+**Status: UNRUN — no router is available.**
+
+- [ ] Download the immediately previous retained APK and verify it against
+  the published `SHA256SUMS`.
+- [ ] Follow the manual downgrade procedure in `docs/repository.md`.
+- [ ] Confirm the previous package version is installed and the hashes of
+  `/etc/config/xray` and `/etc/xray/config.json` remain unchanged.
+- [ ] Restore feed tracking with `apk add xray-openwrt-integration`.
+
+**Evidence:** `manual downgrade: <PASS/FAIL/UNRUN>; checksum: <PASS/FAIL>;
+uci-hash: <unchanged/changed>; config-hash: <unchanged/changed>`
 
 ## Acceptance decision
 
