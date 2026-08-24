@@ -9,3 +9,7 @@ docs/superpowers/
 *.apk
 *.ipk
 .env
+
+# Repository signing private keys (public PEM is committed explicitly)
+keys/*.key
+keys/*private*.pem

@@ -8,6 +8,8 @@ new_test_root
 
 BUILDER="$PWD/scripts/build-apk-repository"
 RENDERER="$PWD/scripts/render-repository-installer"
+PUBLIC_KEY="$PWD/keys/xray-openwrt-repository.pem"
+PUBLIC_KEY_SHA256="$PWD/keys/xray-openwrt-repository.pem.sha256"
 REPOSITORY="$TEST_ROOT/repository"
 SIGNING_KEY="$TEST_ROOT/signing-key.pem"
 MOCK_LOG="$TEST_ROOT/mock.log"
@@ -113,5 +115,15 @@ if sh "$RENDERER" "$TEST_ROOT/installer.in" "$TEST_ROOT/public.pem" \
     printf '%s\n' 'FAIL: renderer must reject non-HTTPS feed URL' >&2
     exit 1
 fi
+
+assert_file_exists "$PUBLIC_KEY"
+assert_file_exists "$PUBLIC_KEY_SHA256"
+assert_file_contains "$PUBLIC_KEY" '-----BEGIN PUBLIC KEY-----'
+assert_file_not_contains "$PUBLIC_KEY" 'PRIVATE'
+assert_eq "$(cat "$PUBLIC_KEY_SHA256")" "$(sha256sum "$PUBLIC_KEY" | awk '{print $1}')"
+openssl ec -pubin -in "$PUBLIC_KEY" -text -noout > "$TEST_ROOT/public-key-details"
+assert_file_contains "$TEST_ROOT/public-key-details" 'ASN1 OID: prime256v1'
+assert_file_contains .gitignore 'keys/*.key'
+assert_file_contains .gitignore 'keys/*private*.pem'
 
 printf '%s\n' 'PASS: signed APK repository builder'
