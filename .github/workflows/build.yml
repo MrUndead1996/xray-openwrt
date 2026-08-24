@@ -57,6 +57,7 @@ jobs:
           cp -a files "$sdk_dir/package/xray-openwrt-integration/files"
 
           cd "$sdk_dir"
+          apk_tool=$PWD/staging_dir/host/bin/apk
           make defconfig
           make package/xray-openwrt-integration/compile V=s
 
@@ -67,7 +68,7 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/artifact/extracted"
           cp "$1" "$GITHUB_WORKSPACE/artifact/$(basename "$1")"
-          "$sdk_dir/staging_dir/host/bin/apk" extract \
+          "$apk_tool" extract \
             --destination "$GITHUB_WORKSPACE/artifact/extracted" "$1"
           (cd "$GITHUB_WORKSPACE/artifact/extracted" && \
             find . -mindepth 1 -printf '%P\n' | sort) \
