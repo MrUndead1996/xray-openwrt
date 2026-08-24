@@ -1,0 +1,281 @@
+name: Publish OpenWrt APK repository
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: xray-openwrt-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate tag and run host tests
+        shell: sh
+        run: |
+          set -eu
+          package_version=$(sed -n 's/^PKG_VERSION:=//p' Makefile)
+          tag_version=${GITHUB_REF_NAME#v}
+          [ -n "$package_version" ]
+          [ "$tag_version" = "$package_version" ]
+          sh tests/run.sh
+
+      - name: Install SDK archive support
+        shell: sh
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y rsync gawk zstd
+
+      - name: Cache pinned SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/openwrt-sdk
+          key: openwrt-sdk-25.12.0-filogic-7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
+
+      - name: Download and verify SDK
+        shell: sh
+        run: |
+          set -eu
+          SDK_URL=https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          SDK_SHA256=7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
+          mkdir -p "$(dirname "$SDK_ARCHIVE")"
+          if [ ! -f "$SDK_ARCHIVE" ]; then
+            curl --fail --location --retry 3 --output "$SDK_ARCHIVE" "$SDK_URL"
+          fi
+          printf '%s  %s\n' "$SDK_SHA256" "$SDK_ARCHIVE" | sha256sum -c -
+
+      - name: Build and validate APK
+        shell: sh
+        run: |
+          set -eu
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
+          SDK_ROOT=.work/openwrt-sdk
+          rm -rf "$SDK_ROOT"
+          mkdir -p "$SDK_ROOT"
+          tar --zstd -xf "$SDK_ARCHIVE" -C "$SDK_ROOT"
+          set -- "$SDK_ROOT"/openwrt-sdk-*
+          [ "$#" -eq 1 ] && [ -d "$1" ]
+          sdk_dir=$1
+
+          mkdir -p "$sdk_dir/package/xray-openwrt-integration"
+          cp Makefile "$sdk_dir/package/xray-openwrt-integration/Makefile"
+          cp -a files "$sdk_dir/package/xray-openwrt-integration/files"
+
+          cd "$sdk_dir"
+          apk_tool=$PWD/staging_dir/host/bin/apk
+          make defconfig
+          make package/xray-openwrt-integration/compile V=s
+
+          set -- $(find bin/packages -type f -name 'xray-openwrt-integration-*.apk' -print)
+          [ "$#" -eq 1 ] || {
+            printf '%s\n' 'expected exactly one APK' >&2
+            exit 1
+          }
+
+          output=$GITHUB_WORKSPACE/release-build
+          mkdir -p "$output/extracted"
+          cp "$1" "$output/$(basename "$1")"
+          "$apk_tool" extract --allow-untrusted \
+            --destination "$output/extracted" "$1"
+          (cd "$output/extracted" && find . -mindepth 1 -printf '%P\n' | sort) \
+            > "$output/content-manifest.txt"
+
+          manifest=$output/content-manifest.txt
+          for forbidden in usr/bin/xray etc/xray/config.json; do
+            ! grep -Eq "(^|/)$forbidden$" "$manifest" || {
+              printf '%s\n' "forbidden APK path: $forbidden" >&2
+              exit 1
+            }
+          done
+          for required in \
+            etc/init.d/xray \
+            etc/config/xray \
+            etc/xray/config.example.json \
+            etc/xray/tproxy.nft \
+            usr/bin/update-xray-core \
+            usr/bin/update-xray-assets \
+            usr/bin/rollback-xray-core \
+            usr/libexec/xray/common \
+            usr/libexec/xray/tproxy; do
+            grep -Eq "(^|/)$required$" "$manifest" || {
+              printf '%s\n' "missing APK path: $required" >&2
+              exit 1
+            }
+          done
+
+      - name: Upload verified APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build
+          path: |
+            release-build/*.apk
+            release-build/content-manifest.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download verified APK
+        uses: actions/download-artifact@v4
+        with:
+          name: release-build
+          path: release-build
+
+      - name: Install SDK archive support
+        shell: sh
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y zstd
+
+      - name: Cache pinned SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/openwrt-sdk
+          key: openwrt-sdk-25.12.0-filogic-7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
+
+      - name: Download and verify SDK
+        shell: sh
+        run: |
+          set -eu
+          SDK_URL=https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          SDK_SHA256=7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
+          mkdir -p "$(dirname "$SDK_ARCHIVE")"
+          if [ ! -f "$SDK_ARCHIVE" ]; then
+            curl --fail --location --retry 3 --output "$SDK_ARCHIVE" "$SDK_URL"
+          fi
+          printf '%s  %s\n' "$SDK_SHA256" "$SDK_ARCHIVE" | sha256sum -c -
+
+      - name: Prepare SDK host tools
+        id: sdk
+        shell: sh
+        run: |
+          set -eu
+          SDK_ROOT=.work/release-sdk
+          rm -rf "$SDK_ROOT"
+          mkdir -p "$SDK_ROOT"
+          tar --zstd -xf .cache/openwrt-sdk/openwrt-sdk.tar.zst -C "$SDK_ROOT"
+          set -- "$SDK_ROOT"/openwrt-sdk-*
+          [ "$#" -eq 1 ] && [ -d "$1" ]
+          printf 'directory=%s\n' "$PWD/$1" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble and sign repository
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          XRAY_APK_SIGNING_KEY: ${{ secrets.XRAY_APK_SIGNING_KEY }}
+          SDK_DIR: ${{ steps.sdk.outputs.directory }}
+        run: |
+          set -euo pipefail
+          repo_dir=$GITHUB_WORKSPACE/_site/packages/25.12/aarch64_cortex-a53
+          mkdir -p "$repo_dir"
+
+          new_apk=(release-build/*.apk)
+          [[ ${#new_apk[@]} -eq 1 && -f ${new_apk[0]} ]]
+          cp "${new_apk[0]}" "$repo_dir/"
+
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases" \
+            --jq '.[] | select(.draft == false) | .tag_name' \
+            > "$RUNNER_TEMP/release-tags"
+          retained=0
+          while IFS= read -r tag; do
+            [[ $tag == "$GITHUB_REF_NAME" ]] && continue
+            download_dir=$RUNNER_TEMP/previous-$retained
+            mkdir -p "$download_dir"
+            if gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+                --pattern 'xray-openwrt-integration-*.apk' \
+                --dir "$download_dir" 2>/dev/null; then
+              previous=("$download_dir"/*.apk)
+              [[ ${#previous[@]} -eq 1 && -f ${previous[0]} ]]
+              destination=$repo_dir/$(basename "${previous[0]}")
+              if [[ -e $destination ]]; then
+                cmp "${previous[0]}" "$destination"
+              else
+                cp "${previous[0]}" "$destination"
+              fi
+              retained=$((retained + 1))
+              [[ $retained -eq 2 ]] && break
+            fi
+          done < "$RUNNER_TEMP/release-tags"
+
+          repository_apks=("$repo_dir"/*.apk)
+          [[ ${#repository_apks[@]} -ge 1 && ${#repository_apks[@]} -le 3 ]]
+
+          signing_key=$RUNNER_TEMP/xray-openwrt-repository-private.pem
+          derived_public=$RUNNER_TEMP/xray-openwrt-repository-public.pem
+          umask 077
+          printf '%s' "$XRAY_APK_SIGNING_KEY" > "$signing_key"
+          trap 'rm -f "$signing_key" "$derived_public"' EXIT
+          "$SDK_DIR/staging_dir/host/bin/openssl" ec -in "$signing_key" \
+            -pubout -out "$derived_public"
+          cmp "$derived_public" keys/xray-openwrt-repository.pem
+
+          scripts/build-apk-repository \
+            "$SDK_DIR/staging_dir/host/bin/apk" \
+            "$signing_key" \
+            "$repo_dir"
+
+          mkdir -p "$RUNNER_TEMP/repository-keys"
+          cp keys/xray-openwrt-repository.pem \
+            "$RUNNER_TEMP/repository-keys/xray-openwrt-repository.pem"
+          "$SDK_DIR/staging_dir/host/bin/apk" \
+            --keys-dir "$RUNNER_TEMP/repository-keys" \
+            verify "$repo_dir/packages.adb"
+
+          cp keys/xray-openwrt-repository.pem "$GITHUB_WORKSPACE/_site/"
+          cp keys/xray-openwrt-repository.pem.sha256 "$GITHUB_WORKSPACE/_site/"
+          scripts/render-repository-installer \
+            scripts/install-apk-repository.in \
+            keys/xray-openwrt-repository.pem \
+            'https://mrundead1996.github.io/xray-openwrt/packages/25.12/aarch64_cortex-a53/packages.adb' \
+            "$GITHUB_WORKSPACE/_site/install-apk-repository"
+          (cd "$repo_dir" && sha256sum ./*.apk packages.adb | LC_ALL=C sort) \
+            > "$repo_dir/SHA256SUMS"
+          cp release-build/content-manifest.txt "$GITHUB_WORKSPACE/_site/"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Attach recovery assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-build/*.apk
+            _site/packages/25.12/aarch64_cortex-a53/SHA256SUMS
+            _site/xray-openwrt-repository.pem
+            _site/xray-openwrt-repository.pem.sha256
+            _site/install-apk-repository
+            _site/content-manifest.txt
+          fail_on_unmatched_files: true
