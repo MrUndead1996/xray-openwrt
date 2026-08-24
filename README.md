@@ -180,8 +180,7 @@ atomic replace
 │   │   │   └── xray
 │   │   │
 │   │   ├── init.d
-│   │   │   ├── xray
-│   │   │   └── xray-tproxy
+│   │   │   └── xray
 │   │   │
 │   │   └── xray
 │   │       ├── config.example.jsonc
@@ -745,12 +744,19 @@ APK создаётся в SDK по пути:
 bin/packages/aarch64_cortex-a53/base/xray-openwrt-integration-<version>-r<release>.apk
 ```
 
-Workflow публикует APK и `content-manifest.txt` в artifact
-`xray-openwrt-integration`. После скачивания artifact установка локального
-пакета выполняется из его каталога:
+Pull request workflow публикует временный APK и `content-manifest.txt` только
+для проверки. Release workflow по тегу `v<PKG_VERSION>` формирует подписанный
+`packages.adb` и публикует постоянный репозиторий через GitHub Pages.
+
+Однократное подключение репозитория, проверка fingerprint, установка,
+обновление, downgrade и отключение описаны в
+[docs/repository.md](docs/repository.md). После подключения используются
+штатные команды без `--allow-untrusted`:
 
 ```sh
-apk add --allow-untrusted ./xray-openwrt-integration-*.apk
+apk update
+apk add xray-openwrt-integration
+apk upgrade xray-openwrt-integration
 ```
 
 ## Проверка после установки
@@ -847,10 +853,11 @@ ip rule show
 ip route show table 100
 ```
 
-При необходимости:
+При необходимости перезапустить основной service, который управляет и Xray,
+и TProxy lifecycle:
 
 ```sh
-/etc/init.d/xray-tproxy restart
+/etc/init.d/xray restart
 ```
 
 ### Assets не обновляются
@@ -924,22 +931,23 @@ sanitized evidence: [docs/openwrt-acceptance.md](docs/openwrt-acceptance.md).
 Следующие задачи:
 
 - [x] выполнить host tests (`sh tests/run.sh`);
-- [ ] выполнить GitHub Actions build и проверить artifact;
+- [ ] выполнить GitHub Actions release build и проверить Pages/Release artifacts;
 - [ ] выполнить hardware acceptance на OpenWrt router;
-- [ ] оформить OpenWrt package `Makefile`;
-- [ ] вынести TProxy lifecycle в отдельный `xray-tproxy` service;
-- [ ] реализовать `update-xray-core`;
-- [ ] реализовать автоматический rollback;
-- [ ] реализовать `rollback-xray-core`;
-- [ ] добавить безопасный asset updater;
-- [ ] добавить cron installation;
+- [x] оформить OpenWrt package `Makefile`;
+- [x] интегрировать TProxy lifecycle в основной `xray` service;
+- [x] реализовать `update-xray-core`;
+- [x] реализовать автоматический rollback;
+- [x] реализовать `rollback-xray-core`;
+- [x] добавить безопасный asset updater;
+- [x] добавить cron installation;
 - [x] добавить GitHub Actions для сборки `.apk`;
+- [x] добавить signed APK repository release workflow;
 - [ ] протестировать clean install на OpenWrt 25.12;
 - [ ] протестировать package upgrade без перезаписи пользовательского config;
 - [ ] протестировать rollback после намеренно сломанного Xray update.
 
 ## License
 
-Выберите подходящую лицензию для integration layer, например MIT.
+Integration layer распространяется под лицензией MIT, см. `LICENSE`.
 
 Xray-core и используемые geo assets распространяются независимо и под собственными лицензиями.

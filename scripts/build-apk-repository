@@ -1,0 +1,56 @@
+#!/bin/sh
+
+set -eu
+
+fail() {
+    printf '%s\n' "build-apk-repository: $*" >&2
+    exit 1
+}
+
+[ "$#" -eq 3 ] || fail 'usage: build-apk-repository APK_TOOL SIGNING_KEY REPOSITORY_DIR'
+
+apk_tool=$1
+signing_key=$2
+repository_dir=$3
+
+[ -x "$apk_tool" ] || fail "APK tool is not executable: $apk_tool"
+[ -f "$signing_key" ] && [ ! -L "$signing_key" ] || fail "invalid signing key: $signing_key"
+[ -d "$repository_dir" ] && [ ! -L "$repository_dir" ] || fail "invalid repository directory: $repository_dir"
+
+absolute_file() {
+    directory=$(dirname "$1")
+    filename=$(basename "$1")
+    printf '%s/%s\n' "$(cd "$directory" && pwd -P)" "$filename"
+}
+
+apk_tool=$(absolute_file "$apk_tool")
+signing_key=$(absolute_file "$signing_key")
+repository_dir=$(cd "$repository_dir" && pwd -P)
+
+set -- "$repository_dir"/*.apk
+[ -f "$1" ] || fail "no APK files found in $repository_dir"
+
+for apk_file do
+    [ -f "$apk_file" ] && [ ! -L "$apk_file" ] || fail "invalid APK file: $apk_file"
+    apk_name=$(basename "$apk_file")
+    case "$apk_name" in
+        xray-openwrt-integration-[0-9]*-r[0-9]*.apk) ;;
+        *) fail "unexpected APK filename: $apk_name" ;;
+    esac
+done
+
+temporary_index=$repository_dir/packages.adb.tmp
+trap 'rm -f "$temporary_index"' 0 1 2 3 15
+
+"$apk_tool" mkndx \
+    --root "$repository_dir" \
+    --keys-dir "$repository_dir" \
+    --allow-untrusted \
+    --sign "$signing_key" \
+    --output "$temporary_index" \
+    "$@"
+
+"$apk_tool" adbdump --format json "$temporary_index" >/dev/null
+mv "$temporary_index" "$repository_dir/packages.adb"
+trap - 0 1 2 3 15
+

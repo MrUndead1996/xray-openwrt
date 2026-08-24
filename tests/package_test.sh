@@ -25,6 +25,25 @@ assert_file_contains files/etc/capabilities/xray.json 'net_raw'
 assert_file_contains Makefile 'files/etc/capabilities/xray.json'
 assert_file_contains Makefile '$(1)/usr/share/xray'
 
+repository_doc=docs/repository.md
+feed_url='https://mrundead1996.github.io/xray-openwrt/packages/25.12/aarch64_cortex-a53/packages.adb'
+assert_file_exists "$repository_doc"
+assert_file_contains "$repository_doc" "$feed_url"
+assert_file_contains "$repository_doc" 'OpenWrt 25.12'
+assert_file_contains "$repository_doc" 'aarch64_cortex-a53'
+assert_file_contains "$repository_doc" 'xray-openwrt-repository.pem.sha256'
+assert_file_contains "$repository_doc" 'apk add xray-openwrt-integration'
+assert_file_contains "$repository_doc" 'apk upgrade xray-openwrt-integration'
+assert_file_contains "$repository_doc" 'Downgrade'
+assert_file_contains "$repository_doc" 'Unenroll'
+assert_file_not_contains README.md 'apk add --allow-untrusted ./xray-openwrt-integration-*.apk'
+assert_file_contains README.md 'docs/repository.md'
+assert_file_contains docs/openwrt-acceptance.md 'trusted repository'
+assert_file_contains docs/openwrt-acceptance.md 'apk update'
+assert_file_contains docs/openwrt-acceptance.md 'apk add xray-openwrt-integration'
+assert_file_contains docs/openwrt-acceptance.md 'wrong-key'
+assert_file_contains docs/openwrt-acceptance.md 'manual downgrade'
+
 if sed -n '/define Package\/xray-openwrt-integration\/install/,/^endef/p' Makefile | \
     grep -F -q -e '/etc/xray/config.json'; then
     printf '%s\n' 'FAIL: package install commands must not include config.json' >&2

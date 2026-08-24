@@ -5,6 +5,7 @@ set -eu
 . tests/lib/testlib.sh
 
 workflow=.github/workflows/build.yml
+release_workflow=.github/workflows/release.yml
 sdk_url='https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst'
 sdk_sha256='7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139'
 
@@ -46,3 +47,37 @@ assert_file_contains "$workflow" 'actions/upload-artifact@'
 assert_file_contains "$workflow" 'retention-days:'
 
 printf '%s\n' 'PASS: SDK workflow contract'
+
+assert_file_exists "$release_workflow"
+assert_file_contains "$release_workflow" 'name: Publish OpenWrt APK repository'
+assert_file_contains "$release_workflow" 'tags:'
+assert_file_contains "$release_workflow" "- 'v*'"
+assert_file_not_contains "$release_workflow" 'pull_request:'
+assert_file_contains "$release_workflow" 'contents: write'
+assert_file_contains "$release_workflow" 'pages: write'
+assert_file_contains "$release_workflow" 'id-token: write'
+assert_file_contains "$release_workflow" 'environment:'
+assert_file_contains "$release_workflow" 'name: github-pages'
+assert_file_contains "$release_workflow" 'secrets.XRAY_APK_SIGNING_KEY'
+assert_file_contains "$release_workflow" 'package_version=$(sed -n'
+assert_file_contains "$release_workflow" 'tag_version=${GITHUB_REF_NAME#v}'
+assert_file_contains "$release_workflow" 'sh tests/run.sh'
+assert_file_contains "$release_workflow" "$sdk_url"
+assert_file_contains "$release_workflow" "$sdk_sha256"
+assert_file_contains "$release_workflow" 'scripts/build-apk-repository'
+assert_file_contains "$release_workflow" 'scripts/render-repository-installer'
+assert_file_contains "$release_workflow" 'keys/xray-openwrt-repository.pem'
+assert_file_contains "$release_workflow" 'XRAY_APK_SIGNING_KEY'
+assert_file_contains "$release_workflow" 'gh api'
+assert_file_contains "$release_workflow" 'packages/25.12/aarch64_cortex-a53'
+assert_file_contains "$release_workflow" 'packages.adb'
+assert_file_contains "$release_workflow" 'SHA256SUMS'
+assert_file_contains "$release_workflow" 'actions/configure-pages@'
+assert_file_contains "$release_workflow" 'actions/upload-pages-artifact@'
+assert_file_contains "$release_workflow" 'actions/deploy-pages@'
+assert_file_contains "$release_workflow" 'softprops/action-gh-release@'
+assert_file_contains "$release_workflow" 'cancel-in-progress: false'
+assert_file_not_contains "$release_workflow" 'BEGIN EC PRIVATE KEY'
+assert_file_not_contains "$release_workflow" 'BEGIN PRIVATE KEY'
+
+printf '%s\n' 'PASS: release workflow contract'

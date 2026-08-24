@@ -1,0 +1,50 @@
+#!/bin/sh
+
+set -eu
+
+fail() {
+    printf '%s\n' "render-repository-installer: $*" >&2
+    exit 1
+}
+
+[ "$#" -eq 4 ] || fail 'usage: render-repository-installer TEMPLATE PUBLIC_KEY FEED_URL OUTPUT'
+
+template=$1
+public_key=$2
+feed_url=$3
+output=$4
+
+[ -f "$template" ] && [ ! -L "$template" ] || fail "invalid template: $template"
+[ -f "$public_key" ] && [ ! -L "$public_key" ] || fail "invalid public key: $public_key"
+case "$feed_url" in
+    https://*/packages.adb) ;;
+    *) fail 'feed URL must use HTTPS and end with /packages.adb' ;;
+esac
+
+output_directory=$(dirname "$output")
+[ -d "$output_directory" ] || fail "output directory does not exist: $output_directory"
+
+key_sha256=$(sha256sum "$public_key" | awk '{print $1}')
+[ "${#key_sha256}" -eq 64 ] || fail 'failed to calculate public-key SHA-256'
+
+escape_sed_replacement() {
+    printf '%s' "$1" | sed 's/[&|\\]/\\&/g'
+}
+
+escaped_sha=$(escape_sed_replacement "$key_sha256")
+escaped_url=$(escape_sed_replacement "$feed_url")
+temporary_output=$output.tmp
+trap 'rm -f "$temporary_output"' 0 1 2 3 15
+
+sed \
+    -e "s|@KEY_SHA256@|$escaped_sha|g" \
+    -e "s|@FEED_URL@|$escaped_url|g" \
+    "$template" > "$temporary_output"
+
+if grep -Eq '@[A-Z_][A-Z_]*@' "$temporary_output"; then
+    fail 'unresolved template token remains'
+fi
+
+chmod 0755 "$temporary_output"
+mv "$temporary_output" "$output"
+trap - 0 1 2 3 15
