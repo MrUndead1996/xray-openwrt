@@ -20,7 +20,8 @@ assert_file_contains "$workflow" 'actions/cache@'
 assert_file_contains "$workflow" "$sdk_url"
 assert_file_contains "$workflow" "$sdk_sha256"
 assert_file_contains "$workflow" 'sha256sum -c'
-assert_file_contains "$workflow" 'apt-get install -y rsync gawk zstd'
+assert_file_contains "$workflow" 'sudo apt-get update'
+assert_file_contains "$workflow" 'sudo apt-get install -y rsync gawk zstd'
 assert_file_contains "$workflow" 'set -eu'
 assert_file_contains "$workflow" 'package/xray-openwrt-integration'
 assert_file_contains "$workflow" 'make defconfig'
