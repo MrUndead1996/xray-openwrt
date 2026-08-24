@@ -30,6 +30,7 @@ assert_file_contains "$workflow" 'find bin/packages -type f -name '\''xray-openw
 assert_file_contains "$workflow" 'expected exactly one APK'
 assert_file_contains "$workflow" 'apk_tool=$PWD/staging_dir/host/bin/apk'
 assert_file_contains "$workflow" '"$apk_tool" extract'
+assert_file_contains "$workflow" '--allow-untrusted'
 assert_file_not_contains "$workflow" '"$sdk_dir/staging_dir/host/bin/apk" extract'
 assert_file_contains "$workflow" 'find . -mindepth 1 -printf '\''%P\n'\'''
 assert_file_not_contains "$workflow" 'tar --zstd -tf "$1"'
