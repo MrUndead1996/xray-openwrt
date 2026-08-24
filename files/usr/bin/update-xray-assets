@@ -1,0 +1,97 @@
+#!/bin/sh
+
+set -u
+
+COMMON=${XRAY_COMMON:-/usr/libexec/xray/common}
+ASSET_DIR=${XRAY_ASSET_DIR:-/usr/share/xray}
+TMP_ROOT=${XRAY_ASSETS_TMP_ROOT:-/tmp}
+TMP_DIR="$TMP_ROOT/xray-assets.$$"
+INIT_SCRIPT=${XRAY_INIT_SCRIPT:-/etc/init.d/xray}
+LOCK_NAME=assets-update
+locked=0
+changed=0
+failed=0
+
+. "$COMMON"
+
+cleanup() {
+    rm -rf "$TMP_DIR"
+    if [ "$locked" -eq 1 ]; then
+        xray_lock_release "$LOCK_NAME"
+    fi
+}
+
+trap cleanup 0
+trap 'cleanup; trap - 0; exit 1' HUP INT TERM
+
+update_asset() {
+    url=$1
+    name=$2
+    destination="$ASSET_DIR/$name"
+    temporary="$TMP_DIR/$name"
+
+    xray_log assets "checking $name"
+    if ! wget -q -O "$temporary" "$url"; then
+        xray_log assets "download failed for $name"
+        failed=1
+        return
+    fi
+
+    if [ ! -s "$temporary" ]; then
+        xray_log assets "download was empty for $name"
+        rm -f "$temporary"
+        failed=1
+        return
+    fi
+
+    if [ -f "$destination" ] && cmp -s "$temporary" "$destination"; then
+        xray_log assets "unchanged $name"
+        rm -f "$temporary"
+        return
+    fi
+
+    if xray_atomic_install "$temporary" "$destination" 0644 root root; then
+        xray_log assets "updated $name"
+        changed=1
+    else
+        xray_log assets "failed to install $name"
+        failed=1
+    fi
+    rm -f "$temporary"
+}
+
+if ! xray_lock_acquire "$LOCK_NAME"; then
+    exit 1
+fi
+locked=1
+
+if ! mkdir -p "$TMP_DIR" "$ASSET_DIR"; then
+    xray_log assets 'failed to create temporary or asset directory'
+    exit 1
+fi
+
+update_asset \
+    'https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat' \
+    geosite.dat
+update_asset \
+    'https://github.com/1andrevich/Re-filter-lists/releases/latest/download/geoip.dat' \
+    refilter_ip.dat
+update_asset \
+    'https://github.com/1andrevich/Re-filter-lists/releases/latest/download/geosite.dat' \
+    refilter_site.dat
+
+if [ "$changed" -eq 1 ]; then
+    xray_log assets 'assets changed; restarting Xray runtime'
+    if ! "$INIT_SCRIPT" restart_runtime; then
+        xray_log assets 'failed to restart Xray runtime'
+        failed=1
+    fi
+fi
+
+if [ "$failed" -ne 0 ]; then
+    xray_log assets 'asset update completed with errors'
+    exit 1
+fi
+
+xray_log assets 'asset update completed successfully'
+exit 0

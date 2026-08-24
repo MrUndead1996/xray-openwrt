@@ -1,0 +1,144 @@
+#!/bin/sh
+
+set -u
+
+COMMON=${XRAY_COMMON:-/usr/libexec/xray/common}
+TMP_ROOT=${XRAY_CORE_TMP_ROOT:-/tmp}
+TMP_DIR="$TMP_ROOT/xray-rollback.$$"
+INIT_SCRIPT=${XRAY_INIT_SCRIPT:-/etc/init.d/xray}
+XRAY_BIN=${XRAY_BIN:-/usr/bin/xray}
+XRAY_SHA_FILE=${XRAY_SHA_FILE:-/usr/bin/xray.sha256}
+XRAY_PREVIOUS_BIN=${XRAY_PREVIOUS_BIN:-/usr/bin/xray.previous}
+XRAY_PREVIOUS_SHA_FILE=${XRAY_PREVIOUS_SHA_FILE:-/usr/bin/xray.previous.sha256}
+XRAY_CONFIG=${XRAY_CONFIG:-/etc/xray/config.json}
+LOCK_NAME=core-update
+locked=0
+rollback_mode=manual
+
+. "$COMMON"
+
+cleanup() {
+    rm -rf "$TMP_DIR"
+    if [ "$locked" -eq 1 ]; then
+        xray_lock_release "$LOCK_NAME"
+        locked=0
+    fi
+}
+
+trap cleanup 0
+trap 'cleanup; trap - 0; exit 1' HUP INT TERM
+
+usage() {
+    printf '%s\n' 'Usage: rollback-xray-core [--automatic]' >&2
+}
+
+normalize_sha() {
+    value=$1
+
+    case "$value" in
+        ''|*[!0123456789abcdefABCDEF]*) return 1 ;;
+    esac
+    [ "${#value}" -eq 64 ] || return 1
+    printf '%s\n' "$value" | tr 'ABCDEF' 'abcdef'
+}
+
+read_sha_file() {
+    value=$(cat "$1" 2>/dev/null) || return 1
+    normalize_sha "$value"
+}
+
+fail() {
+    xray_log update "$1"
+    exit 1
+}
+
+restore_original() {
+    xray_atomic_install "$STAGED_CURRENT_BIN" "$XRAY_BIN" 0755 root root && \
+        xray_atomic_install "$STAGED_CURRENT_SHA" "$XRAY_SHA_FILE" 0644 root root && \
+        xray_atomic_install "$STAGED_PREVIOUS_BIN" "$XRAY_PREVIOUS_BIN" 0755 root root && \
+        xray_atomic_install "$STAGED_PREVIOUS_SHA" "$XRAY_PREVIOUS_SHA_FILE" 0644 root root
+}
+
+case "$#" in
+    0) ;;
+    1)
+        if [ "$1" = --automatic ]; then
+            rollback_mode=automatic
+        else
+            usage
+            exit 2
+        fi
+        ;;
+    *) usage; exit 2 ;;
+esac
+
+if [ "$rollback_mode" = automatic ]; then
+    xray_log update 'automatic rollback requested'
+else
+    xray_log update 'manual rollback requested'
+fi
+
+if [ ! -f "$XRAY_BIN" ] || [ ! -f "$XRAY_SHA_FILE" ] || \
+    [ ! -f "$XRAY_PREVIOUS_BIN" ] || [ ! -f "$XRAY_PREVIOUS_SHA_FILE" ]; then
+    fail 'rollback requires complete current and previous runtime states'
+fi
+
+current_sha=$(read_sha_file "$XRAY_SHA_FILE") || fail 'current runtime checksum is invalid'
+previous_sha=$(read_sha_file "$XRAY_PREVIOUS_SHA_FILE") || fail 'previous runtime checksum is invalid'
+
+if ! "$XRAY_PREVIOUS_BIN" version; then
+    fail 'previous runtime version check failed'
+fi
+if ! "$XRAY_PREVIOUS_BIN" run -test -config "$XRAY_CONFIG" -format json; then
+    fail 'previous runtime configuration validation failed'
+fi
+
+if ! xray_lock_acquire "$LOCK_NAME"; then
+    exit 1
+fi
+locked=1
+
+umask 077
+if ! mkdir -p "$TMP_DIR" "$(dirname "$XRAY_BIN")"; then
+    fail 'failed to create rollback temporary directory'
+fi
+
+STAGED_CURRENT_BIN="$TMP_DIR/xray.current"
+STAGED_CURRENT_SHA="$TMP_DIR/xray.current.sha256"
+STAGED_PREVIOUS_BIN="$TMP_DIR/xray.previous"
+STAGED_PREVIOUS_SHA="$TMP_DIR/xray.previous.sha256"
+
+if ! cp "$XRAY_BIN" "$STAGED_CURRENT_BIN" || \
+    ! printf '%s\n' "$current_sha" > "$STAGED_CURRENT_SHA" || \
+    ! cp "$XRAY_PREVIOUS_BIN" "$STAGED_PREVIOUS_BIN" || \
+    ! printf '%s\n' "$previous_sha" > "$STAGED_PREVIOUS_SHA"; then
+    fail 'failed to stage rollback state'
+fi
+
+if ! xray_atomic_install "$STAGED_PREVIOUS_BIN" "$XRAY_BIN" 0755 root root || \
+    ! xray_atomic_install "$STAGED_PREVIOUS_SHA" "$XRAY_SHA_FILE" 0644 root root || \
+    ! xray_atomic_install "$STAGED_CURRENT_BIN" "$XRAY_PREVIOUS_BIN" 0755 root root || \
+    ! xray_atomic_install "$STAGED_CURRENT_SHA" "$XRAY_PREVIOUS_SHA_FILE" 0644 root root; then
+    xray_log update 'rollback state installation failed; restoring original state'
+    restore_original || xray_log update 'failed to restore original rollback state'
+    exit 1
+fi
+
+xray_log update 'rollback state installed; restarting service'
+if ! "$INIT_SCRIPT" restart_runtime; then
+    xray_log update 'rollback restart failed; restoring original state'
+    if ! restore_original; then
+        xray_log update 'failed to restore original rollback state'
+        exit 1
+    fi
+    xray_log update 'original runtime restored; restarting service'
+    if ! "$INIT_SCRIPT" restart_runtime; then
+        xray_log update 'original runtime restart failed'
+    fi
+    exit 1
+fi
+
+xray_log update 'runtime rollback completed successfully'
+if [ "$rollback_mode" = manual ]; then
+    printf '%s\n' 'Xray runtime rollback completed'
+fi

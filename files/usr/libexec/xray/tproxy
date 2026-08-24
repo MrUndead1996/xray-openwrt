@@ -1,0 +1,368 @@
+#!/bin/sh
+
+set -u
+
+XRAY_FUNCTIONS_PATH=${XRAY_FUNCTIONS_PATH:-/lib/functions.sh}
+XRAY_TPROXY_RULESET=${XRAY_TPROXY_RULESET:-/etc/xray/tproxy.nft}
+XRAY_TPROXY_TMPDIR=${XRAY_TPROXY_TMPDIR:-/tmp}
+XRAY_TPROXY_STATE=${XRAY_TPROXY_STATE:-/var/run/xray/tproxy.state}
+
+usage() {
+    printf '%s\n' "Usage: ${0##*/} {start|reload|stop|update-interfaces}" >&2
+}
+
+is_uint() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    return 0
+}
+
+is_uint_between() {
+    is_uint "$1" || return 1
+    [ "$1" -ge "$2" ] 2>/dev/null && [ "$1" -le "$3" ] 2>/dev/null
+}
+
+is_mark() {
+    case "$1" in
+        0x[0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|0x[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]) return 0 ;;
+    esac
+    return 1
+}
+
+is_ipv4() {
+    address=$1
+    old_ifs=$IFS
+    IFS=.
+    set -- $address
+    IFS=$old_ifs
+    [ "$#" -eq 4 ] || return 1
+    for octet in "$@"; do
+        is_uint_between "$octet" 0 255 || return 1
+    done
+    return 0
+}
+
+is_ipv4_cidr() {
+    value=$1
+    case "$value" in
+        */*)
+            address=${value%%/*}
+            prefix=${value#*/}
+            [ "$address/$prefix" = "$value" ] || return 1
+            is_ipv4 "$address" && is_uint_between "$prefix" 0 32
+            ;;
+        *) is_ipv4 "$value" ;;
+    esac
+}
+
+bypass_elements=
+bypass_invalid=0
+add_bypass_cidr() {
+    if ! is_ipv4_cidr "$1"; then
+        bypass_invalid=1
+        return 0
+    fi
+    if [ -n "$bypass_elements" ]; then
+        bypass_elements="$bypass_elements, $1"
+    else
+        bypass_elements=$1
+    fi
+}
+
+load_config() {
+    [ -r "$XRAY_FUNCTIONS_PATH" ] || {
+        printf '%s\n' "xray-tproxy: missing $XRAY_FUNCTIONS_PATH" >&2
+        return 1
+    }
+    # shellcheck disable=SC1090
+    . "$XRAY_FUNCTIONS_PATH"
+
+    config_load xray || return 1
+    config_get enabled main enabled 0
+    config_get tproxy_port main tproxy_port 52345
+    config_get mark main mark 0x40
+    config_get mask main mask 0xc0
+    config_get bypass_mark main bypass_mark 0x80
+    config_get route_table main route_table 100
+
+    case "$enabled" in
+        0|1) ;;
+        *) printf '%s\n' 'xray-tproxy: enabled must be 0 or 1' >&2; return 1 ;;
+    esac
+    is_uint_between "$tproxy_port" 1 65535 || {
+        printf '%s\n' 'xray-tproxy: invalid tproxy_port' >&2
+        return 1
+    }
+    is_uint_between "$route_table" 1 4294967295 || {
+        printf '%s\n' 'xray-tproxy: invalid route_table' >&2
+        return 1
+    }
+    is_mark "$mark" && is_mark "$mask" && is_mark "$bypass_mark" || {
+        printf '%s\n' 'xray-tproxy: invalid mark' >&2
+        return 1
+    }
+    [ $((mark)) -ne 0 ] && [ $((mask)) -ne 0 ] && [ $((bypass_mark)) -ne 0 ] && \
+        [ $((mark & mask)) -eq $((mark)) ] && \
+        [ $((bypass_mark & mask)) -eq $((bypass_mark)) ] && \
+        [ $((mark & bypass_mark)) -eq 0 ] || {
+        printf '%s\n' 'xray-tproxy: incompatible marks' >&2
+        return 1
+    }
+
+    bypass_elements=
+    bypass_invalid=0
+    bypass_iteration_failed=0
+    config_list_foreach main bypass_cidr add_bypass_cidr || bypass_iteration_failed=1
+    [ "$bypass_invalid" -eq 0 ] && [ "$bypass_iteration_failed" -eq 0 ] || {
+        printf '%s\n' 'xray-tproxy: invalid bypass_cidr' >&2
+        return 1
+    }
+    if [ -n "$bypass_elements" ]; then
+        bypass_set_elements="elements = { $bypass_elements }"
+    else
+        bypass_set_elements=
+    fi
+}
+
+get_xray_gid() {
+    gid=$(getent group xray 2>/dev/null | awk -F: 'NR == 1 { print $3; exit }')
+    if ! is_uint_between "$gid" 0 4294967295; then
+        gid=$(id -g xray 2>/dev/null || :)
+    fi
+    is_uint_between "$gid" 0 4294967295 || {
+        printf '%s\n' 'xray-tproxy: cannot determine xray group ID' >&2
+        return 1
+    }
+    printf '%s\n' "$gid"
+}
+
+new_batch() {
+    mkdir -p "$XRAY_TPROXY_TMPDIR" || return 1
+    mktemp "$XRAY_TPROXY_TMPDIR/xray-tproxy.XXXXXX"
+}
+
+render_ruleset() {
+    batch=$1
+    gid=$(get_xray_gid) || return 1
+    [ -r "$XRAY_TPROXY_RULESET" ] || return 1
+
+    {
+        printf '%s\n' 'destroy table inet xray'
+        sed \
+        -e "s/@PORT@/$tproxy_port/g" \
+        -e "s/@MARK@/$mark/g" \
+        -e "s/@MASK@/$mask/g" \
+        -e "s/@BYPASS_MARK@/$bypass_mark/g" \
+        -e "s/@GID@/$gid/g" \
+        -e "s/@BYPASS_ELEMENTS@/$bypass_set_elements/g" \
+        "$XRAY_TPROXY_RULESET"
+    } > "$batch"
+}
+
+apply_ruleset() {
+    batch=$(new_batch) || return 1
+    trap 'rm -f "$batch"' 0 1 2 3 15
+    render_ruleset "$batch" || return 1
+    nft -c -f "$batch" || return 1
+    nft -f "$batch"
+}
+
+policy_priority=10000
+
+set_default_owned_state() {
+    mark=0x40
+    mask=0xc0
+    route_table=100
+}
+
+load_owned_state() {
+    set_default_owned_state
+    [ -r "$XRAY_TPROXY_STATE" ] || return 1
+
+    while IFS='=' read -r key value; do
+        case "$key" in
+            mark) mark=$value ;;
+            mask) mask=$value ;;
+            route_table) route_table=$value ;;
+            ruleset_begin) break ;;
+        esac
+    done < "$XRAY_TPROXY_STATE"
+
+    is_mark "$mark" && is_mark "$mask" && \
+        is_uint_between "$route_table" 1 4294967295
+}
+
+save_owned_state() {
+    state_directory=${XRAY_TPROXY_STATE%/*}
+    temporary_state="$XRAY_TPROXY_STATE.new.$$"
+
+    [ "$state_directory" = "$XRAY_TPROXY_STATE" ] || mkdir -p "$state_directory" || return 1
+    umask 077
+    {
+        printf 'mark=%s\n' "$mark"
+        printf 'mask=%s\n' "$mask"
+        printf 'route_table=%s\n' "$route_table"
+        printf 'ruleset_begin=1\n'
+        cat "$batch"
+    } > "$temporary_state" || return 1
+    mv "$temporary_state" "$XRAY_TPROXY_STATE" || {
+        rm -f "$temporary_state"
+        return 1
+    }
+}
+
+has_restorable_state() {
+    [ -r "$XRAY_TPROXY_STATE" ] && \
+        grep -F -q -e 'ruleset_begin=1' "$XRAY_TPROXY_STATE"
+}
+
+restore_previous_state() {
+    failed_mark=$mark
+    failed_mask=$mask
+    failed_route_table=$route_table
+    restore_batch=$(new_batch) || return 1
+
+    load_owned_state || {
+        mark=$failed_mark
+        mask=$failed_mask
+        route_table=$failed_route_table
+        rm -f "$restore_batch"
+        return 1
+    }
+    previous_mark=$mark
+    previous_mask=$mask
+    previous_route_table=$route_table
+    awk 'found { print } $0 == "ruleset_begin=1" { found = 1 }' \
+        "$XRAY_TPROXY_STATE" > "$restore_batch"
+    [ -s "$restore_batch" ] && nft -c -f "$restore_batch" || {
+        mark=$failed_mark
+        mask=$failed_mask
+        route_table=$failed_route_table
+        rm -f "$restore_batch"
+        return 1
+    }
+
+    mark=$failed_mark
+    mask=$failed_mask
+    route_table=$failed_route_table
+    cleanup_owned_state
+    nft -f "$restore_batch" || {
+        rm -f "$restore_batch"
+        return 1
+    }
+
+    mark=$previous_mark
+    mask=$previous_mask
+    route_table=$previous_route_table
+    if ! ip route replace local default dev lo table "$route_table"; then
+        rm -f "$restore_batch"
+        return 1
+    fi
+    delete_matching_rules
+    ip rule add pref "$policy_priority" fwmark "$mark/$mask" table "$route_table"
+    restore_status=$?
+    rm -f "$restore_batch"
+    return "$restore_status"
+}
+
+delete_matching_rules() {
+    ip rule show 2>/dev/null | awk \
+        -v priority="$policy_priority:" \
+        -v rule_mark="$mark/$mask" \
+        -v rule_table="$route_table" '
+        $1 == priority && $2 == "from" && $3 == "all" &&
+        $4 == "fwmark" && $5 == rule_mark && $6 == "lookup" &&
+        $7 == rule_table && NF == 7 { print }
+    ' | while IFS= read -r rule; do
+        ip rule del pref "$policy_priority" fwmark "$mark/$mask" \
+            table "$route_table" 2>/dev/null || :
+    done
+}
+
+update_interfaces() {
+    [ "$enabled" = 1 ] || return 0
+    nft list table inet xray >/dev/null 2>&1 || return 0
+
+    batch=$(new_batch) || return 1
+    trap 'rm -f "$batch"' 0 1 2 3 15
+    printf '%s\n' 'flush set inet xray interface' > "$batch"
+
+    addresses=$(ip -4 -o addr show scope global 2>/dev/null | awk '$3 == "inet" { sub(/\/.*/, "", $4); print $4 }')
+    elements=
+    for address in $addresses; do
+        is_ipv4 "$address" || continue
+        if [ -n "$elements" ]; then
+            elements="$elements, $address"
+        else
+            elements=$address
+        fi
+    done
+    [ -z "$elements" ] || printf '%s\n' "add element inet xray interface { $elements }" >> "$batch"
+
+    nft -c -f "$batch" || return 1
+    nft -f "$batch"
+}
+
+cleanup_owned_state() {
+    nft delete table inet xray 2>/dev/null || :
+    delete_matching_rules
+    ip route del local default dev lo table "$route_table" 2>/dev/null || :
+}
+
+rollback_start() {
+    if has_restorable_state && restore_previous_state; then
+        return 0
+    fi
+    cleanup_owned_state
+    return 1
+}
+
+start() {
+    apply_ruleset || return 1
+    if ! ip route replace local default dev lo table "$route_table"; then
+        rollback_start
+        return 1
+    fi
+    delete_matching_rules
+    if ! ip rule add pref "$policy_priority" fwmark "$mark/$mask" table "$route_table"; then
+        rollback_start
+        return 1
+    fi
+    save_owned_state || {
+        rollback_start
+        return 1
+    }
+}
+
+reload() {
+    apply_ruleset || return 1
+    update_interfaces
+}
+
+stop() {
+    load_owned_state || set_default_owned_state
+    cleanup_owned_state
+    rm -f "$XRAY_TPROXY_STATE"
+    return 0
+}
+
+command=${1:-}
+case "$command" in
+    start|reload|update-interfaces)
+        load_config || exit 1
+        [ "$enabled" = 1 ] || exit 0
+        case "$command" in
+            start) start ;;
+            reload) reload ;;
+            update-interfaces) update_interfaces ;;
+        esac
+        ;;
+    stop)
+        stop
+        ;;
+    *)
+        usage
+        exit 2
+        ;;
+esac

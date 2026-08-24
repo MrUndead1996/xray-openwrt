@@ -1,0 +1,111 @@
+name: Build OpenWrt APK
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDK archive support
+        shell: sh
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y rsync gawk zstd
+
+      - name: Cache pinned SDK and package inputs
+        uses: actions/cache@v4
+        with:
+          path: .cache/openwrt-sdk
+          key: openwrt-sdk-25.12.0-filogic-7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139-${{ hashFiles('Makefile', 'files/**') }}
+
+      - name: Download and verify SDK
+        shell: sh
+        run: |
+          set -eu
+          SDK_URL=https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic/openwrt-sdk-25.12.0-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+          SDK_SHA256=7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
+          mkdir -p "$(dirname "$SDK_ARCHIVE")"
+          if [ ! -f "$SDK_ARCHIVE" ]; then
+            curl --fail --location --retry 3 --output "$SDK_ARCHIVE" "$SDK_URL"
+          fi
+          printf '%s  %s\n' "$SDK_SHA256" "$SDK_ARCHIVE" | sha256sum -c -
+
+      - name: Build package
+        shell: sh
+        run: |
+          set -eu
+          SDK_ARCHIVE=.cache/openwrt-sdk/openwrt-sdk.tar.zst
+          SDK_ROOT=.work/openwrt-sdk
+          rm -rf "$SDK_ROOT"
+          mkdir -p "$SDK_ROOT"
+          tar --zstd -xf "$SDK_ARCHIVE" -C "$SDK_ROOT"
+          set -- "$SDK_ROOT"/openwrt-sdk-*
+          [ "$#" -eq 1 ] && [ -d "$1" ]
+          sdk_dir=$1
+
+          mkdir -p "$sdk_dir/package/xray-openwrt-integration"
+          cp Makefile "$sdk_dir/package/xray-openwrt-integration/Makefile"
+          cp -a files "$sdk_dir/package/xray-openwrt-integration/files"
+
+          cd "$sdk_dir"
+          apk_tool=$PWD/staging_dir/host/bin/apk
+          make defconfig
+          make package/xray-openwrt-integration/compile V=s
+
+          set -- $(find bin/packages -type f -name 'xray-openwrt-integration-*.apk' -print)
+          if [ "$#" -ne 1 ]; then
+            printf '%s\n' 'expected exactly one APK' >&2
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/artifact/extracted"
+          cp "$1" "$GITHUB_WORKSPACE/artifact/$(basename "$1")"
+          "$apk_tool" extract \
+            --allow-untrusted \
+            --destination "$GITHUB_WORKSPACE/artifact/extracted" "$1"
+          (cd "$GITHUB_WORKSPACE/artifact/extracted" && \
+            find . -mindepth 1 -printf '%P\n' | sort) \
+            > "$GITHUB_WORKSPACE/artifact/content-manifest.txt"
+
+      - name: Validate APK contents
+        shell: sh
+        run: |
+          set -eu
+          manifest=artifact/content-manifest.txt
+          for forbidden in usr/bin/xray etc/xray/config.json; do
+            if grep -Eq "(^|/)$forbidden$" "$manifest"; then
+              printf '%s\n' "forbidden APK path: $forbidden" >&2
+              exit 1
+            fi
+          done
+          for required in \
+            etc/init.d/xray \
+            etc/config/xray \
+            etc/xray/config.example.json \
+            etc/xray/tproxy.nft \
+            usr/bin/update-xray-core \
+            usr/bin/update-xray-assets \
+            usr/bin/rollback-xray-core \
+            usr/libexec/xray/common \
+            usr/libexec/xray/tproxy; do
+            if ! grep -Eq "(^|/)$required$" "$manifest"; then
+              printf '%s\n' "missing APK path: $required" >&2
+              exit 1
+            fi
+          done
+
+      - name: Upload APK and content manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: xray-openwrt-integration
+          path: artifact/
+          if-no-files-found: error
+          retention-days: 7

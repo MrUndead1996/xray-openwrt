@@ -1,0 +1,10 @@
+{
+  "bounding": [
+    "net_admin",
+    "net_raw"
+  ],
+  "ambient": [
+    "net_admin",
+    "net_raw"
+  ]
+}

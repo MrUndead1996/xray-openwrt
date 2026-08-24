@@ -1,0 +1,160 @@
+#!/bin/sh
+
+set -u
+
+COMMON=${XRAY_COMMON:-/usr/libexec/xray/common}
+TMP_ROOT=${XRAY_CORE_TMP_ROOT:-/tmp}
+TMP_DIR="$TMP_ROOT/xray-core.$$"
+INIT_SCRIPT=${XRAY_INIT_SCRIPT:-/etc/init.d/xray}
+ROLLBACK_SCRIPT=${XRAY_ROLLBACK_SCRIPT:-/usr/bin/rollback-xray-core}
+XRAY_BIN=${XRAY_BIN:-/usr/bin/xray}
+XRAY_SHA_FILE=${XRAY_SHA_FILE:-/usr/bin/xray.sha256}
+XRAY_PREVIOUS_BIN=${XRAY_PREVIOUS_BIN:-/usr/bin/xray.previous}
+XRAY_PREVIOUS_SHA_FILE=${XRAY_PREVIOUS_SHA_FILE:-/usr/bin/xray.previous.sha256}
+XRAY_CONFIG=${XRAY_CONFIG:-/etc/xray/config.json}
+LOCK_NAME=core-update
+DGST_URL=https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip.dgst
+ZIP_URL=https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip
+ZIP_NAME=Xray-linux-arm64-v8a.zip
+locked=0
+
+. "$COMMON"
+
+cleanup() {
+    rm -rf "$TMP_DIR"
+    if [ "$locked" -eq 1 ]; then
+        xray_lock_release "$LOCK_NAME"
+    fi
+}
+
+trap cleanup 0
+trap 'cleanup; trap - 0; exit 1' HUP INT TERM
+
+normalize_sha() {
+    value=$1
+
+    case "$value" in
+        ''|*[!0123456789abcdefABCDEF]*) return 1 ;;
+    esac
+    [ "${#value}" -eq 64 ] || return 1
+    printf '%s\n' "$value" | tr 'ABCDEF' 'abcdef'
+}
+
+read_sha_file() {
+    file=$1
+    value=$(cat "$file" 2>/dev/null) || return 1
+    normalize_sha "$value"
+}
+
+fail() {
+    xray_log update "$1"
+    exit 1
+}
+
+if ! xray_lock_acquire "$LOCK_NAME"; then
+    exit 1
+fi
+locked=1
+
+umask 077
+if ! mkdir -p "$TMP_DIR" "$(dirname "$XRAY_BIN")"; then
+    fail 'failed to create temporary or runtime directory'
+fi
+
+DGST_FILE="$TMP_DIR/$ZIP_NAME.dgst"
+ZIP_FILE="$TMP_DIR/$ZIP_NAME"
+CANDIDATE="$TMP_DIR/xray"
+
+xray_log update 'downloading release checksum'
+if ! wget -q -O "$DGST_FILE" "$DGST_URL" || [ ! -s "$DGST_FILE" ]; then
+    fail 'failed to download release checksum'
+fi
+
+expected_matches=$(awk -v name="$ZIP_NAME" '
+    $1 ~ /^[0-9A-Fa-f]{64}$/ && $2 == name { print $1 }
+' "$DGST_FILE")
+set -- $expected_matches
+if [ "$#" -ne 1 ]; then
+    fail 'release checksum is malformed'
+fi
+expected_sha=$(normalize_sha "$1") || fail 'release checksum is malformed'
+
+current_sha=
+if [ -f "$XRAY_BIN" ] || [ -f "$XRAY_SHA_FILE" ]; then
+    if [ ! -f "$XRAY_BIN" ] || [ ! -f "$XRAY_SHA_FILE" ]; then
+        fail 'current runtime state is incomplete'
+    fi
+    current_sha=$(read_sha_file "$XRAY_SHA_FILE") || fail 'current runtime checksum is invalid'
+    if [ "$current_sha" = "$expected_sha" ]; then
+        xray_log update 'runtime is already current'
+        exit 0
+    fi
+fi
+
+xray_log update 'downloading release archive'
+if ! wget -q -O "$ZIP_FILE" "$ZIP_URL" || [ ! -s "$ZIP_FILE" ]; then
+    fail 'failed to download release archive'
+fi
+actual_sha=$(sha256sum "$ZIP_FILE" 2>/dev/null | awk 'NR == 1 { print $1 }')
+actual_sha=$(normalize_sha "$actual_sha") || fail 'downloaded archive checksum is invalid'
+if [ "$actual_sha" != "$expected_sha" ]; then
+    fail 'downloaded archive checksum does not match release checksum'
+fi
+
+entries=$(unzip -l "$ZIP_FILE" 2>/dev/null | awk '
+    NR > 3 && $1 !~ /^-+$/ && NF >= 4 { print $4 }
+') || fail 'failed to inspect release archive'
+xray_entries=0
+for entry in $entries; do
+    case "$entry" in
+        ''|/*|*/|*\\*) fail 'release archive contains an unsafe entry' ;;
+    esac
+    case "/$entry/" in
+        *'/../'*|*'/./'*|*'//'*) fail 'release archive contains an unsafe entry' ;;
+    esac
+    if [ "$entry" = xray ]; then
+        xray_entries=$((xray_entries + 1))
+    fi
+done
+if [ "$xray_entries" -ne 1 ]; then
+    fail 'release archive does not contain exactly one xray binary'
+fi
+
+if ! unzip -p "$ZIP_FILE" xray > "$CANDIDATE" || [ ! -s "$CANDIDATE" ] || \
+    ! chmod 0755 "$CANDIDATE"; then
+    fail 'failed to extract release binary'
+fi
+if ! "$CANDIDATE" version; then
+    fail 'candidate version check failed'
+fi
+if ! "$CANDIDATE" run -test -config "$XRAY_CONFIG" -format json; then
+    fail 'candidate configuration validation failed'
+fi
+
+if [ -n "$current_sha" ]; then
+    previous_bin="$TMP_DIR/xray.previous"
+    previous_sha="$TMP_DIR/xray.previous.sha256"
+    if ! cp "$XRAY_BIN" "$previous_bin" || \
+        ! printf '%s\n' "$current_sha" > "$previous_sha" || \
+        ! xray_atomic_install "$previous_bin" "$XRAY_PREVIOUS_BIN" 0755 root root || \
+        ! xray_atomic_install "$previous_sha" "$XRAY_PREVIOUS_SHA_FILE" 0644 root root; then
+        fail 'failed to preserve previous runtime'
+    fi
+fi
+
+if ! xray_atomic_install "$CANDIDATE" "$XRAY_BIN" 0755 root root || \
+    ! printf '%s\n' "$expected_sha" > "$TMP_DIR/xray.sha256" || \
+    ! xray_atomic_install "$TMP_DIR/xray.sha256" "$XRAY_SHA_FILE" 0644 root root; then
+    fail 'failed to install candidate runtime'
+fi
+
+xray_log update 'runtime installed; restarting service'
+if ! "$INIT_SCRIPT" restart_runtime; then
+    xray_log update 'runtime restart failed; attempting automatic rollback'
+    if ! "$ROLLBACK_SCRIPT" --automatic; then
+        xray_log update 'automatic rollback failed'
+    fi
+    exit 1
+fi
+
+xray_log update 'runtime update completed successfully'
