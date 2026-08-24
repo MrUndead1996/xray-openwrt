@@ -14,6 +14,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install SDK archive support
+        shell: sh
+        run: |
+          set -eu
+          apt-get update
+          apt-get install -y zstd
+
       - name: Cache pinned SDK and package inputs
         uses: actions/cache@v4
         with:
