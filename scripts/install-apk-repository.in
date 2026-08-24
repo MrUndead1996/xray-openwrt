@@ -1,0 +1,94 @@
+#!/bin/sh
+
+set -eu
+
+KEY_SHA256='@KEY_SHA256@'
+FEED_URL='@FEED_URL@'
+KEY_URL='https://mrundead1996.github.io/xray-openwrt/xray-openwrt-repository.pem'
+KEY_NAME='xray-openwrt-repository.pem'
+
+etc_root=${XRAY_ETC_ROOT:-/etc}
+fetch_cmd=${XRAY_FETCH:-uclient-fetch}
+apk_cmd=${XRAY_APK:-apk}
+
+fail() {
+    printf '%s\n' "install-apk-repository: $*" >&2
+    exit 1
+}
+
+release_file=$etc_root/openwrt_release
+arch_file=$etc_root/apk/arch
+key_dir=$etc_root/apk/keys
+feed_dir=$etc_root/apk/repositories.d
+feed_file=$feed_dir/customfeeds.list
+key_file=$key_dir/$KEY_NAME
+
+[ -f "$release_file" ] || fail "missing OpenWrt release file: $release_file"
+[ -f "$arch_file" ] || fail "missing APK architecture file: $arch_file"
+
+# This file is provided by OpenWrt and is root-owned.
+. "$release_file"
+case "${DISTRIB_RELEASE:-}" in
+    25.12|25.12.*) ;;
+    *) fail 'unsupported OpenWrt release; expected 25.12.x' ;;
+esac
+
+[ "$(cat "$arch_file")" = aarch64_cortex-a53 ] || \
+    fail 'unsupported APK architecture; expected aarch64_cortex-a53'
+[ -d "$key_dir" ] || fail "missing APK key directory: $key_dir"
+[ -d "$feed_dir" ] || fail "missing APK repositories directory: $feed_dir"
+
+temporary_dir=$(mktemp -d "${TMPDIR:-/tmp}/xray-apk-repository.XXXXXX") || \
+    fail 'failed to create temporary directory'
+trap 'rm -rf "$temporary_dir"' 0 1 2 3 15
+
+downloaded_key=$temporary_dir/$KEY_NAME
+downloaded_index=$temporary_dir/packages.adb
+temporary_keys=$temporary_dir/keys
+mkdir "$temporary_keys"
+
+"$fetch_cmd" -q -O "$downloaded_key" "$KEY_URL" || \
+    fail 'failed to download repository public key'
+
+actual_sha256=$(sha256sum "$downloaded_key" | awk '{print $1}')
+[ "$actual_sha256" = "$KEY_SHA256" ] || fail 'repository key fingerprint mismatch'
+
+"$fetch_cmd" -q -O "$downloaded_index" "$FEED_URL" || \
+    fail 'failed to download repository index'
+cp "$downloaded_key" "$temporary_keys/$KEY_NAME"
+chmod 0644 "$temporary_keys/$KEY_NAME"
+"$apk_cmd" --keys-dir "$temporary_keys" verify "$downloaded_index" || \
+    fail 'repository index signature verification failed'
+
+temporary_key=$(mktemp "$key_dir/.xray-openwrt-repository-key.XXXXXX") || \
+    fail 'failed to stage repository key'
+temporary_feed=$(mktemp "$feed_dir/.xray-openwrt-repository-feed.XXXXXX") || {
+    rm -f "$temporary_key"
+    fail 'failed to stage repository feed'
+}
+trap 'rm -rf "$temporary_dir"; rm -f "$temporary_key" "$temporary_feed"' 0 1 2 3 15
+
+cp "$downloaded_key" "$temporary_key"
+chmod 0644 "$temporary_key"
+
+if [ -f "$feed_file" ]; then
+    awk -v feed="$FEED_URL" '$0 != feed { print }' "$feed_file" > "$temporary_feed"
+fi
+printf '%s\n' "$FEED_URL" >> "$temporary_feed"
+chmod 0644 "$temporary_feed"
+
+if [ ! -f "$key_file" ] || ! cmp -s "$temporary_key" "$key_file"; then
+    mv "$temporary_key" "$key_file"
+else
+    rm -f "$temporary_key"
+fi
+
+if [ ! -f "$feed_file" ] || ! cmp -s "$temporary_feed" "$feed_file"; then
+    mv "$temporary_feed" "$feed_file"
+else
+    rm -f "$temporary_feed"
+fi
+
+trap - 0 1 2 3 15
+rm -rf "$temporary_dir"
+printf '%s\n' 'Xray OpenWrt APK repository enrolled successfully'
