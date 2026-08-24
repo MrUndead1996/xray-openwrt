@@ -5,6 +5,8 @@ set -eu
 . tests/lib/testlib.sh
 
 assert_file_contains Makefile 'PKG_NAME:=xray-openwrt-integration'
+assert_file_contains Makefile '+uclient-fetch'
+assert_file_not_contains Makefile '+wget-ssl'
 assert_file_contains Makefile 'files/etc/init.d/xray'
 assert_file_contains Makefile 'files/etc/xray/tproxy.nft'
 assert_file_contains Makefile 'files/etc/hotplug.d/iface/99-xray'
@@ -24,6 +26,10 @@ assert_file_contains files/etc/capabilities/xray.json 'net_admin'
 assert_file_contains files/etc/capabilities/xray.json 'net_raw'
 assert_file_contains Makefile 'files/etc/capabilities/xray.json'
 assert_file_contains Makefile '$(1)/usr/share/xray'
+assert_file_contains files/usr/bin/update-xray-core 'uclient-fetch -q -O'
+assert_file_not_contains files/usr/bin/update-xray-core 'wget -q -O'
+assert_file_contains files/usr/bin/update-xray-assets 'uclient-fetch -q -O'
+assert_file_not_contains files/usr/bin/update-xray-assets 'wget -q -O'
 
 repository_doc=docs/repository.md
 feed_url='https://mrundead1996.github.io/xray-openwrt/packages/25.12/aarch64_cortex-a53/packages.adb'

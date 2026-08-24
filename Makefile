@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=xray-openwrt-integration
-PKG_VERSION:=1.0.0
+PKG_VERSION:=1.0.1
 PKG_RELEASE:=1
 PKG_LICENSE:=MIT
 PKG_MAINTAINER:=Xray OpenWrt Integration Contributors
@@ -12,7 +12,7 @@ define Package/xray-openwrt-integration
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Xray OpenWrt integration layer
-  DEPENDS:=+ca-bundle +wget-ssl +unzip +ip-full +kmod-nft-tproxy +kmod-nft-socket +kmod-nft-fib +kmod-nf-conntrack +firewall4 +procd-ujail
+  DEPENDS:=+ca-bundle +uclient-fetch +unzip +ip-full +kmod-nft-tproxy +kmod-nft-socket +kmod-nft-fib +kmod-nf-conntrack +firewall4 +procd-ujail
   USERID:=xray:xray
 endef
 

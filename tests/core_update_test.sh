@@ -32,7 +32,7 @@ cat > "$TEST_ROOT/bin/logger" <<'EOF'
 printf 'logger %s\n' "$*" >> "$MOCK_LOG"
 EOF
 
-cat > "$TEST_ROOT/bin/wget" <<'EOF'
+cat > "$TEST_ROOT/bin/uclient-fetch" <<'EOF'
 #!/bin/sh
 output=
 url=
@@ -42,7 +42,7 @@ while [ "$#" -gt 0 ]; do
         *) url=$1; shift ;;
     esac
 done
-printf 'wget %s\n' "$url" >> "$MOCK_LOG"
+printf 'uclient-fetch %s\n' "$url" >> "$MOCK_LOG"
 case "$url" in
     *.dgst) printf '%s\n' "${DGST_CONTENT:?}" > "$output" ;;
     *.zip) cp "$DOWNLOADS/Xray-linux-arm64-v8a.zip" "$output" ;;
@@ -100,7 +100,7 @@ printf 'rollback %s\n' "$*" >> "$MOCK_LOG"
 exit "${ROLLBACK_STATUS:-0}"
 EOF
 
-/bin/chmod +x "$TEST_ROOT/bin/logger" "$TEST_ROOT/bin/wget" \
+/bin/chmod +x "$TEST_ROOT/bin/logger" "$TEST_ROOT/bin/uclient-fetch" \
     "$TEST_ROOT/bin/sha256sum" "$TEST_ROOT/bin/unzip" \
     "$TEST_ROOT/bin/chown" "$INIT_SCRIPT" "$ROLLBACK_SCRIPT"
 
@@ -167,7 +167,7 @@ install_current
 printf '%s\n' "$EXPECTED_SHA" > "$CURRENT_SHA"
 run_updater
 assert_log_count 1 '.dgst'
-assert_exact_log_count 0 'wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip'
+assert_exact_log_count 0 'uclient-fetch https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip'
 assert_log_count 0 'init restart_runtime'
 assert_cleanup
 
@@ -181,7 +181,7 @@ if run_updater; then
     exit 1
 fi
 assert_log_count 1 '.dgst'
-assert_exact_log_count 0 'wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip'
+assert_exact_log_count 0 'uclient-fetch https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip'
 assert_cleanup
 
 # 3. A bad ZIP checksum must leave existing state untouched.
@@ -276,7 +276,7 @@ if run_updater; then
     printf '%s\n' 'FAIL: concurrent update must fail' >&2
     exit 1
 fi
-assert_log_count 0 'wget '
+assert_log_count 0 'uclient-fetch '
 rm -rf "$LOCK_ROOT/core-update"
 
 # 11. Cleanup also applies to the successful and every failing path above.

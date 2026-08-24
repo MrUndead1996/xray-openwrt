@@ -66,7 +66,7 @@ ZIP_FILE="$TMP_DIR/$ZIP_NAME"
 CANDIDATE="$TMP_DIR/xray"
 
 xray_log update 'downloading release checksum'
-if ! wget -q -O "$DGST_FILE" "$DGST_URL" || [ ! -s "$DGST_FILE" ]; then
+if ! uclient-fetch -q -O "$DGST_FILE" "$DGST_URL" || [ ! -s "$DGST_FILE" ]; then
     fail 'failed to download release checksum'
 fi
 
@@ -92,7 +92,7 @@ if [ -f "$XRAY_BIN" ] || [ -f "$XRAY_SHA_FILE" ]; then
 fi
 
 xray_log update 'downloading release archive'
-if ! wget -q -O "$ZIP_FILE" "$ZIP_URL" || [ ! -s "$ZIP_FILE" ]; then
+if ! uclient-fetch -q -O "$ZIP_FILE" "$ZIP_URL" || [ ! -s "$ZIP_FILE" ]; then
     fail 'failed to download release archive'
 fi
 actual_sha=$(sha256sum "$ZIP_FILE" 2>/dev/null | awk 'NR == 1 { print $1 }')

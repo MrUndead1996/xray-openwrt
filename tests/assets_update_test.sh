@@ -25,7 +25,7 @@ cat > "$TEST_ROOT/bin/logger" <<'EOF'
 printf 'logger %s\n' "$*" >> "$MOCK_LOG"
 EOF
 
-cat > "$TEST_ROOT/bin/wget" <<'EOF'
+cat > "$TEST_ROOT/bin/uclient-fetch" <<'EOF'
 #!/bin/sh
 output=
 url=
@@ -41,7 +41,7 @@ while [ "$#" -gt 0 ]; do
             ;;
     esac
 done
-printf 'wget %s\n' "$url" >> "$MOCK_LOG"
+printf 'uclient-fetch %s\n' "$url" >> "$MOCK_LOG"
 case "$url" in
     *domain-list-community*) fixture=geosite.dat ;;
     *geoip.dat) fixture=refilter_ip.dat ;;
@@ -79,7 +79,7 @@ printf 'init %s\n' "$*" >> "$MOCK_LOG"
 exit "${INIT_STATUS:-0}"
 EOF
 
-/bin/chmod +x "$TEST_ROOT/bin/logger" "$TEST_ROOT/bin/wget" \
+/bin/chmod +x "$TEST_ROOT/bin/logger" "$TEST_ROOT/bin/uclient-fetch" \
     "$TEST_ROOT/bin/chown" "$TEST_ROOT/bin/mv" "$INIT_SCRIPT"
 
 run_updater() {
@@ -119,7 +119,7 @@ cp "$DOWNLOADS/geosite.dat" "$ASSETS/geosite.dat"
 cp "$DOWNLOADS/refilter_ip.dat" "$ASSETS/refilter_ip.dat"
 cp "$DOWNLOADS/refilter_site.dat" "$ASSETS/refilter_site.dat"
 run_updater
-assert_log_count 3 'wget https://'
+assert_log_count 3 'uclient-fetch https://'
 assert_log_count 0 "mv $ASSETS/"
 assert_log_count 0 'init restart_runtime'
 assert_no_temp_or_lock
@@ -157,7 +157,7 @@ if run_updater; then
 fi
 assert_file_exists "$ASSETS/refilter_ip.dat"
 assert_file_exists "$ASSETS/refilter_site.dat"
-assert_log_count 3 'wget https://'
+assert_log_count 3 'uclient-fetch https://'
 assert_log_count 1 'init restart_runtime'
 assert_no_temp_or_lock
 
@@ -178,14 +178,14 @@ if run_updater; then
     printf '%s\n' 'FAIL: simultaneous updater invocation must fail' >&2
     exit 1
 fi
-assert_log_count 0 'wget https://'
+assert_log_count 0 'uclient-fetch https://'
 assert_file_contains "$MOCK_LOG" 'logger -t xray-lock -- busy lock: assets-update'
 rm -rf "$LOCK_ROOT/assets-update"
 
 reset_state
 WGET_WAIT=1
-WGET_STARTED="$TEST_ROOT/wget-started"
-WGET_PID_FILE="$TEST_ROOT/wget-pid"
+WGET_STARTED="$TEST_ROOT/uclient-fetch-started"
+WGET_PID_FILE="$TEST_ROOT/uclient-fetch-pid"
 export WGET_WAIT WGET_STARTED WGET_PID_FILE
 XRAY_COMMON="$PWD/files/usr/libexec/xray/common" \
 XRAY_ASSET_DIR="$ASSETS" \

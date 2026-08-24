@@ -31,7 +31,7 @@ update_asset() {
     temporary="$TMP_DIR/$name"
 
     xray_log assets "checking $name"
-    if ! wget -q -O "$temporary" "$url"; then
+    if ! uclient-fetch -q -O "$temporary" "$url"; then
         xray_log assets "download failed for $name"
         failed=1
         return
