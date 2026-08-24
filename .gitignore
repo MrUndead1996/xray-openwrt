@@ -8,3 +8,4 @@ docs/superpowers/
 /staging_dir/
 *.apk
 *.ipk
+.env
