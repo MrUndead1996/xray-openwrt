@@ -1,2 +1,10 @@
 current/
 docs/superpowers/
+
+# Generated OpenWrt SDK and package build outputs
+/bin/
+/build_dir/
+/dl/
+/staging_dir/
+*.apk
+*.ipk

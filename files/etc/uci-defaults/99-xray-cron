@@ -1,0 +1,38 @@
+#!/bin/sh
+
+set -u
+
+CRONTAB=${XRAY_CRONTAB:-/etc/crontabs/root}
+TMP="$CRONTAB.new.$$"
+MARKER='# xray-openwrt-integration'
+
+cleanup() {
+    rm -f "$TMP"
+}
+
+trap cleanup 0 HUP INT TERM
+
+if ! mkdir -p "$(dirname "$CRONTAB")"; then
+    exit 1
+fi
+
+if [ -f "$CRONTAB" ]; then
+    sed '/#[[:space:]]*xray-openwrt-integration[[:space:]]*$/d' "$CRONTAB" > "$TMP" || exit 1
+else
+    : > "$TMP" || exit 1
+fi
+
+printf '%s\n' \
+    "17 4 * * 0 /usr/bin/update-xray-assets $MARKER" \
+    "47 4 * * 0 /usr/bin/update-xray-core $MARKER" >> "$TMP" || exit 1
+
+if [ -f "$CRONTAB" ] && cmp -s "$TMP" "$CRONTAB"; then
+    exit 0
+fi
+
+if ! mv "$TMP" "$CRONTAB"; then
+    exit 1
+fi
+
+killall -HUP crond 2>/dev/null || /etc/init.d/cron restart
+exit 0

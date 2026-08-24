@@ -1,0 +1,11 @@
+#!/bin/sh
+
+helper=${XRAY_TPROXY_HELPER:-/usr/libexec/xray/tproxy}
+
+case "${ACTION:-}" in
+    reload)
+        "$helper" reload >/dev/null 2>&1 || :
+        ;;
+esac
+
+exit 0

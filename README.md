@@ -33,7 +33,7 @@
              ┌──────────────┴──────────────┐
              │                             │
         procd / jail                  Xray config
-             │                     /etc/xray/config.jsonc
+             │                      /etc/xray/config.json
              │
              ▼
           Xray-core
@@ -201,7 +201,7 @@ atomic replace
 Рабочий пользовательский конфиг:
 
 ```text
-/etc/xray/config.jsonc
+/etc/xray/config.json
 ```
 
 не должен содержаться в публичном Git-репозитории.
@@ -209,8 +209,11 @@ atomic replace
 В репозиторий помещается только:
 
 ```text
-/etc/xray/config.example.jsonc
+/etc/xray/config.example.json
 ```
+
+Каталог `current/` содержит reference-only снимок рабочей системы и не
+включается в APK.
 
 ## TProxy architecture
 
@@ -413,10 +416,10 @@ packet
 Полный конфиг следует хранить в:
 
 ```text
-/etc/xray/config.jsonc
+/etc/xray/config.json
 ```
 
-## JSONC
+## JSON
 
 Xray запускается с:
 
@@ -424,17 +427,11 @@ Xray запускается с:
 -format json
 ```
 
-даже если файл имеет расширение:
-
-```text
-.jsonc
-```
-
 Например:
 
 ```sh
 xray run \
-  -config /etc/xray/config.jsonc \
+  -config /etc/xray/config.json \
   -format json
 ```
 
@@ -443,7 +440,7 @@ xray run \
 ```sh
 xray run \
   -test \
-  -config /etc/xray/config.jsonc \
+  -config /etc/xray/config.json \
   -format json
 ```
 
@@ -697,12 +694,14 @@ xray-openwrt-integration
 
 ```text
 /etc/init.d/xray
-/etc/init.d/xray-tproxy
 /etc/config/xray
+/etc/xray/config.example.json
 /etc/xray/tproxy.nft
 /usr/bin/update-xray-core
 /usr/bin/rollback-xray-core
 /usr/bin/update-xray-assets
+/usr/libexec/xray/common
+/usr/libexec/xray/tproxy
 ```
 
 ## Configuration persistence
@@ -711,7 +710,7 @@ xray-openwrt-integration
 
 ```text
 /etc/config/xray
-/etc/xray/config.jsonc
+/etc/xray/config.json
 ```
 
 Они не должны безусловно перезаписываться при обновлении APK.
@@ -727,23 +726,28 @@ xray-openwrt-integration
 
 ## Build
 
-Проект предполагается собирать OpenWrt SDK для соответствующего target.
+GitHub Actions собирает пакет из официального, зафиксированного SDK OpenWrt
+25.12.0 для `mediatek/filogic`. Workflow проверяет SHA256 SDK, затем создаёт
+APK и `content-manifest.txt`; manifest подтверждает integration payload и
+отсутствие `/usr/bin/xray` и `/etc/xray/config.json`.
 
 Для текущей платформы:
 
 ```text
-OpenWrt 25.12.x
+OpenWrt 25.12.0
 mediatek/filogic
 aarch64_cortex-a53
 ```
 
-Результатом сборки должен быть:
+APK создаётся в SDK по пути:
 
 ```text
-xray-openwrt-integration-<version>.apk
+bin/packages/aarch64_cortex-a53/base/xray-openwrt-integration-<version>-r<release>.apk
 ```
 
-Установка локального пакета:
+Workflow публикует APK и `content-manifest.txt` в artifact
+`xray-openwrt-integration`. После скачивания artifact установка локального
+пакета выполняется из его каталога:
 
 ```sh
 apk add --allow-untrusted ./xray-openwrt-integration-*.apk
@@ -762,7 +766,7 @@ xray --version
 ```sh
 xray run \
   -test \
-  -config /etc/xray/config.jsonc \
+  -config /etc/xray/config.json \
   -format json
 ```
 
@@ -913,8 +917,15 @@ ps w | grep '[c]rond'
 - custom geosite/IP lists;
 - периодическое обновление assets.
 
+Статус проверки: host tests завершены (`sh tests/run.sh`); hardware acceptance и
+GitHub Actions остаются **UNRUN**. Исполнимый checklist и формат
+sanitized evidence: [docs/openwrt-acceptance.md](docs/openwrt-acceptance.md).
+
 Следующие задачи:
 
+- [x] выполнить host tests (`sh tests/run.sh`);
+- [ ] выполнить GitHub Actions build и проверить artifact;
+- [ ] выполнить hardware acceptance на OpenWrt router;
 - [ ] оформить OpenWrt package `Makefile`;
 - [ ] вынести TProxy lifecycle в отдельный `xray-tproxy` service;
 - [ ] реализовать `update-xray-core`;
@@ -922,7 +933,7 @@ ps w | grep '[c]rond'
 - [ ] реализовать `rollback-xray-core`;
 - [ ] добавить безопасный asset updater;
 - [ ] добавить cron installation;
-- [ ] добавить GitHub Actions для сборки `.apk`;
+- [x] добавить GitHub Actions для сборки `.apk`;
 - [ ] протестировать clean install на OpenWrt 25.12;
 - [ ] протестировать package upgrade без перезаписи пользовательского config;
 - [ ] протестировать rollback после намеренно сломанного Xray update.
