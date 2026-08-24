@@ -9,6 +9,8 @@ sdk_url='https://downloads.openwrt.org/releases/25.12.0/targets/mediatek/filogic
 sdk_sha256='7e45a85b4af8af53ff17ca610ad6a7df312568cb52b730f93a21a91899f33139'
 
 assert_file_exists "$workflow"
+assert_file_contains "$workflow" 'pull_request:'
+assert_file_not_contains "$workflow" '  push:'
 assert_file_contains "$workflow" 'permissions:'
 assert_file_contains "$workflow" 'contents: read'
 assert_file_not_contains "$workflow" 'runner.temp'
@@ -18,7 +20,7 @@ assert_file_contains "$workflow" 'actions/cache@'
 assert_file_contains "$workflow" "$sdk_url"
 assert_file_contains "$workflow" "$sdk_sha256"
 assert_file_contains "$workflow" 'sha256sum -c'
-assert_file_contains "$workflow" 'apt-get install -y zstd'
+assert_file_contains "$workflow" 'apt-get install -y rsync gawk zstd'
 assert_file_contains "$workflow" 'set -eu'
 assert_file_contains "$workflow" 'package/xray-openwrt-integration'
 assert_file_contains "$workflow" 'make defconfig'
