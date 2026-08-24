@@ -14,7 +14,7 @@ The Xray runtime remains outside this package and continues to be managed by
 This design covers:
 
 - release-triggered package builds with the pinned OpenWrt SDK;
-- creation and signing of the OpenWrt 25.12 `package.adb` repository index;
+- creation and signing of the OpenWrt 25.12 `packages.adb` repository index;
 - publication of the repository through GitHub Pages;
 - one-time trust and repository bootstrap on a router;
 - package installation, upgrade, rollback availability, and CI verification;
@@ -62,7 +62,7 @@ The published tree contains:
 packages/
 └── 25.12/
     └── aarch64_cortex-a53/
-        ├── package.adb
+        ├── packages.adb
         ├── xray-openwrt-integration-<version>-r<release>.apk
         └── SHA256SUMS
 ```
@@ -91,7 +91,7 @@ The release workflow:
 6. Extracts and validates the APK payload with the SDK host APK tool.
 7. Rejects `/usr/bin/xray` and `/etc/xray/config.json` in the payload.
 8. Retrieves existing retained package files from the Pages deployment.
-9. Generates `package.adb` using the APK tooling from the pinned SDK.
+9. Generates `packages.adb` using the APK tooling from the pinned SDK.
 10. Signs the index with the repository private key.
 11. Verifies the completed repository using the corresponding public key.
 12. Produces `SHA256SUMS` for operator diagnostics.
