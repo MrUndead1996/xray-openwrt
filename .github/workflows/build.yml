@@ -67,8 +67,8 @@ jobs:
           fi
           mkdir -p "$GITHUB_WORKSPACE/artifact/extracted"
           cp "$1" "$GITHUB_WORKSPACE/artifact/$(basename "$1")"
-          tar -tf "$1" | sort > "$GITHUB_WORKSPACE/artifact/content-manifest.txt"
-          tar -xf "$1" -C "$GITHUB_WORKSPACE/artifact/extracted"
+          tar --zstd -tf "$1" | sort > "$GITHUB_WORKSPACE/artifact/content-manifest.txt"
+          tar --zstd -xf "$1" -C "$GITHUB_WORKSPACE/artifact/extracted"
 
       - name: Validate APK contents
         shell: sh
